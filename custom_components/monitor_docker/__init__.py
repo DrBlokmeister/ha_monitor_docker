@@ -148,3 +148,26 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api = hass.data[DOMAIN].pop(entry.entry_id)[API]
         api._dockerStopped = True
     return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old entry data to new version."""
+    version = entry.version
+
+    if version > 1:
+        return True
+
+    _LOGGER.debug("Migrating config entry from version %s", version)
+
+    data = {k: v for k, v in entry.data.items() if k not in (CONF_CONTAINERS, CONF_MONITORED_CONDITIONS)}
+    options = dict(entry.options)
+
+    for key in (CONF_CONTAINERS, CONF_MONITORED_CONDITIONS):
+        if key in entry.data and key not in options:
+            options[key] = entry.data[key]
+
+    entry.version = 2
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
+    _LOGGER.info("Migrated Monitor Docker config entry from version %s to %s", version, entry.version)
+
+    return True

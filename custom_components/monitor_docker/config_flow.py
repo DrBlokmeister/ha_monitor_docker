@@ -21,7 +21,7 @@ from .const import (
 class MonitorDockerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Monitor Docker."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
