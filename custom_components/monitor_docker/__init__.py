@@ -1,11 +1,13 @@
-"""Monitor Docker main component."""
+"""Monitor Docker integration."""
+from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_MONITORED_CONDITIONS,
     CONF_NAME,
@@ -14,10 +16,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.reload import async_setup_reload_service
 
 from .const import (
     API,
+    CONFIG,
     CONF_CERTPATH,
     CONF_CONTAINERS,
     CONF_CONTAINERS_EXCLUDE,
@@ -36,7 +38,6 @@ from .const import (
     CONF_SWITCHNAME,
     CONF_BUTTONENABLED,
     CONF_BUTTONNAME,
-    CONFIG,
     CONTAINER_INFO_ALLINONE,
     DEFAULT_NAME,
     DEFAULT_RETRY,
@@ -46,6 +47,7 @@ from .const import (
     DOMAIN,
     MONITORED_CONDITIONS_LIST,
     PRECISION,
+    COMPONENTS,
 )
 from .helpers import DockerAPI
 
@@ -94,85 +96,58 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 
-#################################################################
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Will setup the Monitor Docker platform."""
+    """Set up Monitor Docker component."""
+    hass.data.setdefault(DOMAIN, {})
 
-    async def RunDocker(hass: HomeAssistant, entry: ConfigType) -> None:
-        """Wrapper around function for a separated thread."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        await hass.config_entries.async_setup(entry.entry_id)
 
-        # Create docker instance, it will have asyncio threads
-        hass.data[DOMAIN][entry[CONF_NAME]] = {}
-        hass.data[DOMAIN][entry[CONF_NAME]][CONFIG] = entry
-
-        startCount = 0
-
-        while True:
-            doLoop = True
-
-            try:
-                hass.data[DOMAIN][entry[CONF_NAME]][API] = DockerAPI(hass, entry)
-                await hass.data[DOMAIN][entry[CONF_NAME]][API].init(startCount)
-            except Exception as err:
-                doLoop = False
-                if entry[CONF_RETRY] == 0:
-                    raise
-                else:
-                    _LOGGER.error("Failed Docker connect: %s", str(err))
-                    _LOGGER.error("Retry in %d seconds", entry[CONF_RETRY])
-                    await asyncio.sleep(entry[CONF_RETRY])
-
-            startCount += 1
-
-            if doLoop:
-                # Now run forever in this separated thread
-                # loop.run_forever()
-
-                # We only get here if a docker instance disconnected or HASS is stopping
-                if not hass.data[DOMAIN][entry[CONF_NAME]][API]._dockerStopped:
-                    # If HASS stopped, do not retry
-                    break
-
-    # Setup reload service
-    # await async_setup_reload_service(hass, DOMAIN, [DOMAIN])
-
-    # Create domain monitor_docker data variable
-    hass.data[DOMAIN] = {}
-
-    # Now go through all possible entries, we support 1 or more docker hosts (untested)
-    for entry in config[DOMAIN]:
-
-        # Default MONITORED_CONDITIONS_LIST also contains allinone, so we need to fix it up here
-        if len(entry[CONF_MONITORED_CONDITIONS]) == 0:
-            # Add whole list, including allinone. Make a copy, no reference
-            entry[CONF_MONITORED_CONDITIONS] = MONITORED_CONDITIONS_LIST.copy()
-            # remove the allinone
-            entry[CONF_MONITORED_CONDITIONS].remove(CONTAINER_INFO_ALLINONE)
-
-        # Check if CONF_MONITORED_CONDITIONS has only ALLINONE, then expand to all
-        if (
-            len(entry[CONF_MONITORED_CONDITIONS]) == 1
-            and CONTAINER_INFO_ALLINONE in entry[CONF_MONITORED_CONDITIONS]
-        ):
-            entry[CONF_MONITORED_CONDITIONS] = list(MONITORED_CONDITIONS_LIST) + list(
-                [CONTAINER_INFO_ALLINONE]
+    if DOMAIN in config:
+        for conf in config[DOMAIN]:
+            hass.async_create_task(
+                hass.config_entries.flow.async_init(
+                    DOMAIN,
+                    context={"source": config_entries.SOURCE_IMPORT},
+                    data=conf,
+                )
             )
-
-        if entry[CONF_NAME] in hass.data[DOMAIN]:
-            _LOGGER.error(
-                "Instance %s is duplicate, please assign an unique name",
-                entry[CONF_NAME],
-            )
-            return False
-
-        # Each docker hosts runs in its own thread. We need to pass hass too, for the load_platform
-        asyncio.create_task(RunDocker(hass, entry))
 
     return True
 
 
-#################################################################
-async def async_reset_platform(hass: HomeAssistant, integration_name: str) -> None:
-    """Reload the integration."""
-    if DOMAIN not in hass.data:
-        _LOGGER.error("monitor_docker not loaded")
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Monitor Docker from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
+
+    raw_config = {**entry.data, **entry.options}
+    config = DOCKER_SCHEMA(raw_config)
+
+    if len(config[CONF_MONITORED_CONDITIONS]) == 0:
+        config[CONF_MONITORED_CONDITIONS] = MONITORED_CONDITIONS_LIST.copy()
+        config[CONF_MONITORED_CONDITIONS].remove(CONTAINER_INFO_ALLINONE)
+
+    if (
+        len(config[CONF_MONITORED_CONDITIONS]) == 1
+        and CONTAINER_INFO_ALLINONE in config[CONF_MONITORED_CONDITIONS]
+    ):
+        config[CONF_MONITORED_CONDITIONS] = list(MONITORED_CONDITIONS_LIST) + [
+            CONTAINER_INFO_ALLINONE
+        ]
+
+    api = DockerAPI(hass, config)
+    await api.init()
+
+    hass.data[DOMAIN][entry.entry_id] = {API: api, CONFIG: config}
+
+    await hass.config_entries.async_forward_entry_setups(entry, COMPONENTS)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload Monitor Docker config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, COMPONENTS)
+    if unload_ok:
+        api = hass.data[DOMAIN].pop(entry.entry_id)[API]
+        api._dockerStopped = True
+    return unload_ok

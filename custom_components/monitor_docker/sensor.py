@@ -11,12 +11,12 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorEntityDescription,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_MONITORED_CONDITIONS, CONF_NAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
 
 from .const import (
@@ -34,7 +34,6 @@ from .const import (
     CONF_RENAME_ENITITY,
     CONF_SENSORNAME,
     CONFIG,
-    CONTAINER,
     CONTAINER_INFO_ALLINONE,
     CONTAINER_INFO_HEALTH,
     CONTAINER_INFO_IMAGE,
@@ -54,54 +53,40 @@ from .helpers import DockerAPI, DockerContainerAPI
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_platform(
+
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
-):
+) -> bool:
     """Set up the Monitor Docker Sensor."""
 
     def find_rename(d: dict[str, str], item: str) -> str:
         for k in d:
             if re.match(k, item):
                 return d[k]
-
         return item
 
-    if discovery_info is None:
-        return
+    data = hass.data[DOMAIN][entry.entry_id]
+    config = data[CONFIG]
+    api: DockerAPI = data[API]
+    instance: str = config[CONF_NAME]
 
-    instance: str = discovery_info[CONF_NAME]
-    name: str = discovery_info[CONF_NAME]
-    api: DockerAPI = hass.data[DOMAIN][name][API]
-    config: ConfigType = hass.data[DOMAIN][name][CONFIG]
-
-    # Set or overrule prefix
-    prefix = name
-    if config[CONF_PREFIX]:
-        prefix = config[CONF_PREFIX]
+    prefix = config[CONF_PREFIX] if config[CONF_PREFIX] else instance
 
     _LOGGER.debug("[%s]: Setting up sensor(s)", instance)
 
-    sensors = []
     sensors: list[DockerSensor | DockerContainerSensor] = [
         DockerSensor(api, instance, prefix, DOCKER_MONITOR_LIST[variable])
         for variable in config[CONF_MONITORED_CONDITIONS]
         if variable in DOCKER_MONITOR_LIST
-        if CONTAINER not in discovery_info
     ]
 
-    # We support add/re-add of a container
-    if CONTAINER in discovery_info:
-        clist = [discovery_info[CONTAINER]]
-    else:
-        clist = api.list_containers()
+    clist = api.list_containers()
 
     allinone = False
     stateremoved = False
 
-    # Detect allinone
     if CONTAINER_INFO_ALLINONE in config[CONF_MONITORED_CONDITIONS]:
         allinone = True
         config[CONF_MONITORED_CONDITIONS].remove(CONTAINER_INFO_ALLINONE)
@@ -110,15 +95,14 @@ async def async_setup_platform(
             config[CONF_MONITORED_CONDITIONS].remove(CONTAINER_INFO_STATE)
 
     for cname in clist:
-        includeContainer = False
+        include_container = False
         if cname in config[CONF_CONTAINERS] or not config[CONF_CONTAINERS]:
-            includeContainer = True
+            include_container = True
 
         if config[CONF_CONTAINERS_EXCLUDE] and cname in config[CONF_CONTAINERS_EXCLUDE]:
-            includeContainer = False
+            include_container = False
 
-        if includeContainer:
-            # Try to figure out if we should include any network sensors
+        if include_container:
             capi = api.get_container(cname)
             info = capi.get_info()
             network_available = info.get(CONTAINER_INFO_NETWORK_AVAILABLE)
@@ -142,7 +126,6 @@ async def async_setup_platform(
                     ):
                         monitor_conditions += [variable]
 
-                # Only force rename of entityid is requested, to not break backwards compatibility
                 alias_entityid = cname
                 if config[CONF_RENAME_ENITITY]:
                     alias_entityid = find_rename(config[CONF_RENAME], cname)
@@ -169,8 +152,9 @@ async def async_setup_platform(
                             and variable not in CONTAINER_MONITOR_NETWORK_LIST
                         )
                     ):
-
-                        # Only force rename of entityid is requested, to not break backwards compatibility
+                        _LOGGER.debug(
+                            "[%s] %s: Add sensor %s", instance, cname, variable
+                        )
                         alias_entityid = cname
                         if config[CONF_RENAME_ENITITY]:
                             alias_entityid = find_rename(config[CONF_RENAME], cname)
@@ -188,16 +172,18 @@ async def async_setup_platform(
                             )
                         ]
 
-    # Restore state, required for destroy/create container
     if allinone:
         config[CONF_MONITORED_CONDITIONS].append(CONTAINER_INFO_ALLINONE)
-    if stateremoved:
-        config[CONF_MONITORED_CONDITIONS].append(CONTAINER_INFO_STATE)
+        if stateremoved:
+            config[CONF_MONITORED_CONDITIONS].append(CONTAINER_INFO_STATE)
+
+    if not sensors:
+        _LOGGER.info("[%s]: No containers set-up", instance)
+        return False
 
     async_add_entities(sensors, True)
 
     return True
-
 
 #################################################################
 class DockerSensor(SensorEntity):
