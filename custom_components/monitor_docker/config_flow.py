@@ -36,6 +36,18 @@ class MonitorDockerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=data_schema)
 
+    async def async_step_import(self, import_config: dict[str, Any]) -> FlowResult:
+        """Handle import from configuration.yaml."""
+        options = {
+            key: import_config[key]
+            for key in (CONF_CONTAINERS, CONF_MONITORED_CONDITIONS)
+            if key in import_config
+        }
+        data = {key: value for key, value in import_config.items() if key not in options}
+        return self.async_create_entry(
+            title=data.get(CONF_NAME, DEFAULT_NAME), data=data, options=options
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:

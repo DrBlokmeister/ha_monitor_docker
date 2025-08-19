@@ -6,8 +6,7 @@ from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
 from homeassistant.const import (
     CONF_MONITORED_CONDITIONS,
     CONF_NAME,
@@ -106,10 +105,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if DOMAIN in config:
         for conf in config[DOMAIN]:
             hass.async_create_task(
-                hass.config_entries.flow.async_init(
-                    DOMAIN,
-                    context={"source": config_entries.SOURCE_IMPORT},
-                    data=conf,
+                hass.config_entries.async_init(
+                    DOMAIN, source=SOURCE_IMPORT, data=conf
                 )
             )
 
