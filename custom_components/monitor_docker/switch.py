@@ -10,6 +10,7 @@ from custom_components.monitor_docker.helpers import DockerAPI, DockerContainerA
 from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchEntity
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -29,6 +30,8 @@ from .const import (
     CONF_SWITCHNAME,
     CONFIG,
     CONTAINER,
+    CONTAINER_INFO_IMAGE,
+    CONTAINER_INFO_IMAGE_HASH,
     CONTAINER_INFO_STATE,
     DOMAIN,
     SERVICE_RESTART,
@@ -182,6 +185,7 @@ class DockerContainerSwitch(SwitchEntity):
         self._instance = instance
         self._prefix = prefix
         self._cname = cname
+        self._alias = alias_name
         self._state = False
         self._entity_id: str = ENTITY_ID_FORMAT.format(
             slugify(f"{self._prefix}_{alias_entityid}")
@@ -214,6 +218,18 @@ class DockerContainerSwitch(SwitchEntity):
     @property
     def is_on(self) -> bool:
         return self._state
+    @property
+    def device_info(self) -> DeviceInfo:
+        info = self._container.get_info()
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._instance}_{self._cname}")},
+            name=self._alias,
+            manufacturer="Docker",
+            model=info.get(CONTAINER_INFO_IMAGE),
+            sw_version=info.get(CONTAINER_INFO_IMAGE_HASH),
+            via_device=(DOMAIN, self._instance),
+        )
+
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._container.start()
