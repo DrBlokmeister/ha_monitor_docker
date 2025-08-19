@@ -14,6 +14,7 @@ from homeassistant.components.sensor import (
 from homeassistant.const import CONF_MONITORED_CONDITIONS, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
@@ -402,8 +403,36 @@ class DockerContainerSensor(SensorEntity):
         )
 
 
+    def _update_device(self) -> None:
+        """Create or migrate device for existing entities."""
+        ent_reg = er.async_get(self.hass)
+        ent_entry = ent_reg.async_get(self.entity_id)
+        if ent_entry is None:
+            return
+
+        info = dict(self.device_info)
+        dev_reg = dr.async_get(self.hass)
+
+        via_device = info.pop("via_device", None)
+        via_device_id = None
+        if via_device is not None:
+            via = dev_reg.async_get_device({via_device})
+            if via is not None:
+                via_device_id = via.id
+
+        device = dev_reg.async_get_or_create(
+            config_entry_id=ent_entry.config_entry_id,
+            via_device_id=via_device_id,
+            **info,
+        )
+
+        if ent_entry.device_id != device.id:
+            ent_reg.async_update_entity(self.entity_id, device_id=device.id)
+
+
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
+        self._update_device()
         self._container.register_callback(
             self.event_callback, self.entity_description.key
         )
