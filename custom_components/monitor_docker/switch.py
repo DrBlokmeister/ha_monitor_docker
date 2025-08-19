@@ -10,8 +10,6 @@ from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
@@ -34,6 +32,7 @@ from .const import (
     DOMAIN,
     SERVICE_RESTART,
 )
+from .entity import DockerBaseEntity
 
 SERVICE_RESTART_SCHEMA = vol.Schema({ATTR_NAME: cv.string, ATTR_SERVER: cv.string})
 
@@ -91,6 +90,8 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     config = data[CONFIG]
     api: DockerAPI = data[API]
+    host_uid: str = data["host_uid"]
+    coordinator = data["coordinator"]
     instance: str = config[CONF_NAME]
     name: str = config[CONF_NAME]
 
@@ -127,6 +128,8 @@ async def async_setup_entry(
 
                 switches.append(
                     DockerContainerSwitch(
+                        coordinator,
+                        host_uid,
                         api.get_container(cname),
                         instance=instance,
                         prefix=prefix,
@@ -151,9 +154,12 @@ async def async_setup_entry(
 
     return True
 
-class DockerContainerSwitch(SwitchEntity):
+
+class DockerContainerSwitch(DockerBaseEntity, SwitchEntity):
     def __init__(
         self,
+        coordinator,
+        host_uid: str,
         container: DockerContainerAPI,
         instance: str,
         prefix: str,
@@ -161,28 +167,26 @@ class DockerContainerSwitch(SwitchEntity):
         alias_entityid: str,
         alias_name: str,
         name_format: str,
-    ):
+    ) -> None:
+        DockerBaseEntity.__init__(self, coordinator, host_uid, container, alias_name)
         self._container = container
         self._instance = instance
         self._prefix = prefix
         self._cname = cname
         self._alias = alias_name
         self._state = False
-        self._entity_id: str = ENTITY_ID_FORMAT.format(
+        self._entity_id = ENTITY_ID_FORMAT.format(
             slugify(f"{self._prefix}_{alias_entityid}")
         )
-        self._name = name_format.format(name=alias_name)
+        self._attr_name = name_format.format(name=alias_name)
+        cid_short = container.id[:12]
+        self._attr_unique_id = f"{host_uid}:{cid_short}:switch"
         self._removed = False
 
     @property
     def entity_id(self) -> str:
         """Return the entity id of the switch."""
         return self._entity_id
-
-    @property
-    def name(self) -> str:
-        """Return the name of the sensor."""
-        return self._name
 
     @property
     def should_poll(self) -> bool:
@@ -199,44 +203,6 @@ class DockerContainerSwitch(SwitchEntity):
     @property
     def is_on(self) -> bool:
         return self._state
-    @property
-    def device_info(self) -> DeviceInfo:
-        info = self._container.get_info()
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._instance}_{self._cname}")},
-            name=self._alias,
-            manufacturer="Docker",
-            model=info.get(CONTAINER_INFO_IMAGE),
-            sw_version=info.get(CONTAINER_INFO_IMAGE_HASH),
-            via_device=(DOMAIN, self._instance),
-        )
-
-
-    def _update_device(self) -> None:
-        """Create or migrate device for existing entities."""
-        ent_reg = er.async_get(self.hass)
-        ent_entry = ent_reg.async_get(self.entity_id)
-        if ent_entry is None:
-            return
-
-        info = dict(self.device_info)
-        dev_reg = dr.async_get(self.hass)
-        via_device = info.pop("via_device", None)
-        via_device_id = None
-        if via_device is not None:
-            via = dev_reg.async_get_device({via_device})
-            if via is not None:
-                via_device_id = via.id
-
-        device = dev_reg.async_get_or_create(
-            config_entry_id=ent_entry.config_entry_id,
-            via_device_id=via_device_id,
-            **info,
-        )
-
-        if ent_entry.device_id != device.id:
-            ent_reg.async_update_entity(self.entity_id, device_id=device.id)
-
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._container.start()
@@ -250,7 +216,6 @@ class DockerContainerSwitch(SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
-        self._update_device()
         self._container.register_callback(self.event_callback, "switch")
 
         # Call event callback for possible information available
