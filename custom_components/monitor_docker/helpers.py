@@ -20,7 +20,6 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.helpers.discovery import load_platform
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -30,7 +29,6 @@ from .const import (
     ATTR_VERSION_KERNEL,
     ATTR_VERSION_OS,
     ATTR_VERSION_OS_TYPE,
-    COMPONENTS,
     CONF_CERTPATH,
     CONF_MEMORYCHANGE,
     CONF_PRECISION_CPU,
@@ -253,15 +251,6 @@ class DockerAPI:
             await self._containers[cname].init()
 
         self._hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._monitor_stop)
-
-        for component in COMPONENTS:
-            load_platform(
-                self._hass,
-                component,
-                DOMAIN,
-                {CONF_NAME: self._instance},
-                self._config,
-            )
 
     #############################################################
     def _docker_ssl_context(self) -> ssl.SSLContext | None:
@@ -587,15 +576,6 @@ class DockerAPI:
         if result:
             # Lets wait 1 second before we try to create sensors/switches/buttons
             await asyncio.sleep(1)
-
-            for component in COMPONENTS:
-                load_platform(
-                    self._hass,
-                    component,
-                    DOMAIN,
-                    {CONF_NAME: self._instance, CONTAINER: cname},
-                    self._config,
-                )
         else:
             _LOGGER.error(
                 "[%s] %s: Problem during start of monitoring", self._instance, cname

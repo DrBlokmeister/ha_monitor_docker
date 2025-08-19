@@ -67,7 +67,13 @@ NOTE: This is untested, use at your own risk!
 
 ### Configuration
 
-To use the `monitor_docker` in your installation, add the following to your `configuration.yaml` file:
+Monitor Docker can be configured from the Home Assistant UI. Existing
+entries defined under `monitor_docker:` in `configuration.yaml` will be
+automatically imported into config entries on startup. Once an entry has
+been imported and verified, the YAML configuration should be removed to
+avoid duplicate setups.
+
+Legacy YAML configuration is still supported and looks like the following:
 
 ```yaml
 # Example configuration.yaml entry

@@ -1,6 +1,5 @@
 """Monitor Docker button component."""
 
-import asyncio
 import logging
 import re
 from typing import Any
@@ -8,14 +7,13 @@ from typing import Any
 import voluptuous as vol
 from custom_components.monitor_docker.helpers import DockerAPI, DockerContainerAPI
 from homeassistant.components.button import ENTITY_ID_FORMAT, ButtonEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
 
 from .const import (
@@ -30,7 +28,6 @@ from .const import (
     CONF_BUTTONENABLED,
     CONF_BUTTONNAME,
     CONFIG,
-    CONTAINER,
     CONTAINER_INFO_IMAGE,
     CONTAINER_INFO_IMAGE_HASH,
     CONTAINER_INFO_STATE,
@@ -43,12 +40,11 @@ SERVICE_RESTART_SCHEMA = vol.Schema({ATTR_NAME: cv.string, ATTR_SERVER: cv.strin
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
-):
+) -> bool:
     """Set up the Monitor Docker Button."""
 
     async def async_restart(parm) -> None:
@@ -90,24 +86,17 @@ async def async_setup_platform(
         for k in d:
             if re.match(k, item):
                 return d[k]
-
         return item
 
-    if discovery_info is None:
-        return
+    data = hass.data[DOMAIN][entry.entry_id]
+    config = data[CONFIG]
+    api: DockerAPI = data[API]
+    instance = config[CONF_NAME]
+    name = config[CONF_NAME]
 
-    instance = discovery_info[CONF_NAME]
-    name = discovery_info[CONF_NAME]
-    api = hass.data[DOMAIN][name][API]
-    config = hass.data[DOMAIN][name][CONFIG]
+    prefix = config[CONF_PREFIX] if config[CONF_PREFIX] else instance
 
-    # Set or overrule prefix
-    prefix = name
-    if config[CONF_PREFIX]:
-        prefix = config[CONF_PREFIX]
-
-    # Don't create any butoon if disabled
-    if config[CONF_BUTTONENABLED] == False:
+    if config[CONF_BUTTONENABLED] is False:
         _LOGGER.debug("[%s]: Button(s) are disabled", instance)
         return True
 
@@ -115,11 +104,7 @@ async def async_setup_platform(
 
     buttons = []
 
-    # We support add/re-add of a container
-    if CONTAINER in discovery_info:
-        clist = [discovery_info[CONTAINER]]
-    else:
-        clist = api.list_containers()
+    clist = api.list_containers()
 
     for cname in clist:
         includeContainer = False
@@ -136,7 +121,6 @@ async def async_setup_platform(
             ):
                 _LOGGER.debug("[%s] %s: Adding component Button", instance, cname)
 
-                # Only force rename of entityid is requested, to not break backwards compatibility
                 alias_entityid = cname
                 if config[CONF_RENAME_ENITITY]:
                     alias_entityid = find_rename(config[CONF_RENAME], cname)
@@ -161,15 +145,12 @@ async def async_setup_platform(
 
     async_add_entities(buttons, True)
 
-    # platform = entity_platform.current_platform.get()
-    # platform.async_register_entity_service(SERVICE_RESTART, {}, "async_restart")
     hass.services.async_register(
         DOMAIN, SERVICE_RESTART, async_restart, schema=SERVICE_RESTART_SCHEMA
     )
 
     return True
 
-#################################################################
 class DockerContainerButton(ButtonEntity):
     def __init__(
         self, 
