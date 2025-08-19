@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import CONF_MONITORED_CONDITIONS, CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
@@ -222,6 +223,15 @@ class DockerSensor(SensorEntity):
         self._name = "{name} {sensor}".format(
             name=self._prefix, sensor=self.entity_description
         )
+        info = api.get_info()
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self._instance)},
+            name=self._prefix,
+            manufacturer="Docker",
+            model="Docker Engine",
+            sw_version=info.get(DOCKER_INFO_VERSION),
+        )
+
 
         self._state = None
         self._attributes: dict[str, Any] = {}
@@ -307,6 +317,7 @@ class DockerContainerSensor(SensorEntity):
         self._container = container
         self._prefix = prefix
         self._cname = cname
+        self._alias = alias_name
         self._condition_list = condition_list
 
         self.entity_description = description
@@ -378,6 +389,18 @@ class DockerContainerSensor(SensorEntity):
     def native_value(self) -> str:
         """Return the state of the sensor."""
         return self._state
+    @property
+    def device_info(self) -> DeviceInfo:
+        info = self._container.get_info()
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._instance}_{self._cname}")},
+            name=self._alias,
+            manufacturer="Docker",
+            model=info.get(CONTAINER_INFO_IMAGE),
+            sw_version=info.get(CONTAINER_INFO_IMAGE_HASH),
+            via_device=(DOMAIN, self._instance),
+        )
+
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
