@@ -1,7 +1,31 @@
 {
     "services": {
         "restart": {
-            "name": "\u05d4\u05e4\u05e2\u05dc\u05d4 \u05de\u05d7\u05d3\u05e9"
+            "name": "הפעלה מחדש"
+        }
+    },
+    "config": {
+        "step": {
+            "user": {
+                "title": "Monitor Docker",
+                "description": "Set up Monitor Docker integration.",
+                "data": {
+                    "name": "Name",
+                    "url": "Docker URL"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Monitor Docker options",
+                "description": "Edit monitored containers and conditions.",
+                "data": {
+                    "containers": "Containers to monitor",
+                    "monitored_conditions": "Monitored conditions"
+                }
+            }
         }
     }
 }
