@@ -16,6 +16,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import slugify
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntryType, async_get as async_get_dev_reg
 
 from .const import (
     API,
@@ -192,6 +194,21 @@ async def async_setup_platform(
     if stateremoved:
         config[CONF_MONITORED_CONDITIONS].append(CONTAINER_INFO_STATE)
 
+    entity_registry = er.async_get(hass)
+    device_registry = async_get_dev_reg(hass)
+    for entity in sensors:
+        if (entry := entity_registry.async_get(entity.entity_id)) and not entry.unique_id:
+            device = device_registry.async_get_device(
+                entity.device_info["identifiers"], set()
+            )
+            if device is None:
+                device = device_registry.async_get_or_create(
+                    config_entry_id=None, **entity.device_info
+                )
+            entity_registry.async_update_entity(
+                entry.entity_id, new_unique_id=entity.unique_id, device_id=device.id
+            )
+
     async_add_entities(sensors, True)
 
     return True
@@ -232,6 +249,24 @@ class DockerSensor(SensorEntity):
             self._instance,
             self.entity_description.name,
         )
+
+    @property
+    def unique_id(self) -> str:
+        host_id = self._api.get_host_id() or self._instance
+        return f"{host_id}_{self.entity_description.key}"
+
+    @property
+    def device_info(self) -> dict:
+        info = self._api.get_info()
+        host_id = self._api.get_host_id() or self._instance
+        return {
+            "identifiers": {(DOMAIN, host_id)},
+            "name": self._instance,
+            "manufacturer": "Docker",
+            "model": info.get(ATTR_VERSION_OS),
+            "sw_version": info.get(DOCKER_INFO_VERSION),
+            "entry_type": DeviceEntryType.SERVICE,
+        }
 
     @property
     def entity_id(self) -> str:
@@ -345,6 +380,22 @@ class DockerContainerSensor(SensorEntity):
             self._cname,
             self.entity_description.name,
         )
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._container.get_id()}_{self.entity_description.key}"
+
+    @property
+    def device_info(self) -> dict:
+        info = self._container.get_info()
+        return {
+            "identifiers": {(DOMAIN, self._container.get_id())},
+            "name": self._cname,
+            "manufacturer": "Docker",
+            "model": info.get(CONTAINER_INFO_IMAGE),
+            "sw_version": info.get(CONTAINER_INFO_IMAGE_HASH),
+            "entry_type": DeviceEntryType.SERVICE,
+        }
 
     @property
     def entity_id(self) -> str:
