@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import voluptuous as vol
-from custom_components.monitor_docker.helpers import DockerAPI, DockerContainerAPI
+from .helpers import DockerAPI, DockerContainerAPI
 from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchEntity
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
@@ -162,6 +162,18 @@ async def async_setup_platform(
     entity_registry = er.async_get(hass)
     device_registry = async_get_dev_reg(hass)
     for entity in switches:
+        old_unique_id = f"{entity._cname}_switch"
+        if entity_id := entity_registry.async_get_entity_id(
+            "switch", DOMAIN, old_unique_id
+        ):
+            entry = entity_registry.async_get(entity_id)
+            device = device_registry.async_get_or_create(
+                config_entry_id=None, **entity.device_info
+            )
+            entity_registry.async_update_entity(
+                entry.entity_id, new_unique_id=entity.unique_id, device_id=device.id
+            )
+            continue
         if (entry := entity_registry.async_get(entity.entity_id)) and not entry.unique_id:
             device = device_registry.async_get_device(
                 entity.device_info["identifiers"], set()

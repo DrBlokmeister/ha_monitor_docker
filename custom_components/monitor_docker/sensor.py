@@ -197,6 +197,21 @@ async def async_setup_platform(
     entity_registry = er.async_get(hass)
     device_registry = async_get_dev_reg(hass)
     for entity in sensors:
+        if isinstance(entity, DockerContainerSensor):
+            old_unique_id = f"{entity._cname}_{entity.entity_description.key}"
+            if entity_id := entity_registry.async_get_entity_id(
+                "sensor", DOMAIN, old_unique_id
+            ):
+                entry = entity_registry.async_get(entity_id)
+                device = device_registry.async_get_or_create(
+                    config_entry_id=None, **entity.device_info
+                )
+                entity_registry.async_update_entity(
+                    entry.entity_id,
+                    new_unique_id=entity.unique_id,
+                    device_id=device.id,
+                )
+                continue
         if (entry := entity_registry.async_get(entity.entity_id)) and not entry.unique_id:
             device = device_registry.async_get_device(
                 entity.device_info["identifiers"], set()

@@ -115,7 +115,10 @@ class DockerAPI:
         self._interval: int = config[CONF_SCAN_INTERVAL].seconds
         self._retry_interval: int = config[CONF_RETRY]
         _LOGGER.debug(
-            "[%s] CONF_SCAN_INTERVAL=%d, RETRY=%", self._interval, self._retry_interval
+            "[%s] CONF_SCAN_INTERVAL=%d, RETRY=%d",
+            self._instance,
+            self._interval,
+            self._retry_interval,
         )
 
     async def init(self, startCount=0):
@@ -271,6 +274,7 @@ class DockerAPI:
                 model=image,
                 sw_version=image_id,
                 entry_type=DeviceEntryType.SERVICE,
+                via_device=(DOMAIN, self._host_id) if self._host_id else None,
             )
 
             # We will monitor all containers, including excluded ones.
@@ -357,7 +361,7 @@ class DockerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers = []
 
     #############################################################
     def register_callback(self, callback: Callable, variable: str) -> None:
@@ -505,6 +509,15 @@ class DockerAPI:
                                 cname,
                             )
 
+                            cid = self._containers[oname].get_id()
+                            device_registry = async_get_dev_reg(self._hass)
+                            if device := device_registry.async_get_device(
+                                {(DOMAIN, cid)}, set()
+                            ):
+                                device_registry.async_update_device(
+                                    device.id, name=cname
+                                )
+
                             # First remove the newly create container, has a temporary name
                             if oname in self._event_create:
                                 _LOGGER.warning(
@@ -630,6 +643,7 @@ class DockerAPI:
             model=image,
             sw_version=image_id,
             entry_type=DeviceEntryType.SERVICE,
+            via_device=(DOMAIN, self._host_id) if self._host_id else None,
         )
 
         # Create our Docker Container API
@@ -1455,7 +1469,7 @@ class DockerContainerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers = []
 
     #############################################################
     async def _start(self) -> None:
