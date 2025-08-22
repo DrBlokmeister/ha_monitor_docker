@@ -22,6 +22,10 @@ from homeassistant.const import (
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers.discovery import load_platform
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.device_registry import (
+    DeviceEntryType,
+    async_get as async_get_dev_reg,
+)
 
 from .const import (
     ATTR_MEMORY_LIMIT,
@@ -99,6 +103,7 @@ class DockerAPI:
         self._containers: dict[str, DockerContainerAPI] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._info: dict[str, Any] = {}
+        self._host_id: str | None = None
         self._event_create: dict[str, int] = {}
         self._event_destroy: dict[str, int] = {}
         self._dockerStopped = False
@@ -110,7 +115,10 @@ class DockerAPI:
         self._interval: int = config[CONF_SCAN_INTERVAL].seconds
         self._retry_interval: int = config[CONF_RETRY]
         _LOGGER.debug(
-            "[%s] CONF_SCAN_INTERVAL=%d, RETRY=%", self._interval, self._retry_interval
+            "[%s] CONF_SCAN_INTERVAL=%d, RETRY=%d",
+            self._instance,
+            self._interval,
+            self._retry_interval,
         )
 
     async def init(self, startCount=0):
@@ -224,6 +232,20 @@ class DockerAPI:
         versionInfo = await self._api.version()
         version: str | None = versionInfo.get("Version", None)
 
+        # Retrieve host information for device registration
+        host_info = await self._api.system.info()
+        self._host_id = host_info.get("ID")
+        device_registry = async_get_dev_reg(self._hass)
+        device_registry.async_get_or_create(
+            config_entry_id=None,
+            identifiers={(DOMAIN, self._host_id)},
+            manufacturer="Docker",
+            name=self._instance,
+            model=host_info.get("OperatingSystem"),
+            sw_version=version,
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
         # Pre 19.03 support memory calculation is dropped
         _LOGGER.debug("[%s]: Docker version: %s", self._instance, version)
 
@@ -239,6 +261,21 @@ class DockerAPI:
         for container in containers or []:
             # Determine name from Docker API, it contains an array with a slash
             cname: str = container._container["Names"][0][1:]
+            cid: str = container._container.get("Id")
+
+            image = container._container.get("Image")
+            image_id = container._container.get("ImageID")
+
+            device_registry.async_get_or_create(
+                config_entry_id=None,
+                identifiers={(DOMAIN, cid)},
+                manufacturer="Docker",
+                name=cname,
+                model=image,
+                sw_version=image_id,
+                entry_type=DeviceEntryType.SERVICE,
+                via_device=(DOMAIN, self._host_id) if self._host_id else None,
+            )
 
             # We will monitor all containers, including excluded ones.
             # This is needed to get total CPU/Memory usage.
@@ -249,6 +286,7 @@ class DockerAPI:
                 self._config,
                 self._api,
                 cname,
+                cid,
             )
             await self._containers[cname].init()
 
@@ -323,7 +361,7 @@ class DockerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers = []
 
     #############################################################
     def register_callback(self, callback: Callable, variable: str) -> None:
@@ -471,6 +509,15 @@ class DockerAPI:
                                 cname,
                             )
 
+                            cid = self._containers[oname].get_id()
+                            device_registry = async_get_dev_reg(self._hass)
+                            if device := device_registry.async_get_device(
+                                {(DOMAIN, cid)}, set()
+                            ):
+                                device_registry.async_update_device(
+                                    device.id, name=cname
+                                )
+
                             # First remove the newly create container, has a temporary name
                             if oname in self._event_create:
                                 _LOGGER.warning(
@@ -576,9 +623,32 @@ class DockerAPI:
 
         _LOGGER.debug("[%s] %s: Starting Container Monitor", self._instance, cname)
 
+        # Fetch container information to register the device
+        try:
+            container = await self._api.containers.get(cname)
+            raw = await container.show()
+            cid = raw.get("Id")
+            image = raw.get("Config", {}).get("Image")
+            image_id = raw.get("Image")
+        except Exception as err:
+            _LOGGER.error("[%s] %s: Failed to get container info (%s)", self._instance, cname, err)
+            return
+
+        device_registry = async_get_dev_reg(self._hass)
+        device_registry.async_get_or_create(
+            config_entry_id=None,
+            identifiers={(DOMAIN, cid)},
+            manufacturer="Docker",
+            name=cname,
+            model=image,
+            sw_version=image_id,
+            entry_type=DeviceEntryType.SERVICE,
+            via_device=(DOMAIN, self._host_id) if self._host_id else None,
+        )
+
         # Create our Docker Container API
         self._containers[cname] = DockerContainerAPI(
-            self._config, self._api, cname, atInit=False
+            self._config, self._api, cname, cid, atInit=False
         )
 
         # We should wait until container is attached
@@ -808,6 +878,10 @@ class DockerAPI:
             return None
 
     #############################################################
+    def get_host_id(self) -> str | None:
+        return self._host_id
+
+    #############################################################
     def get_info(self) -> dict[str, Any]:
         return self._info
 
@@ -821,6 +895,7 @@ class DockerContainerAPI:
         config: ConfigType,
         api: aiodocker.Docker,
         cname: str,
+        cid: str,
         atInit=True,
     ):
         self._config = config
@@ -828,6 +903,7 @@ class DockerContainerAPI:
         self._instance: str = config[CONF_NAME]
         self._memChange: int = config[CONF_MEMORYCHANGE]
         self._name = cname
+        self._id = cid
         self._interval: int = config[CONF_SCAN_INTERVAL].seconds
         self._retry_interval: int = config[CONF_RETRY]
         self._busy = False
@@ -846,6 +922,9 @@ class DockerContainerAPI:
 
         self._info: dict[str, Any] = {}
         self._stats: dict[str, Any] = {}
+
+    def get_id(self) -> str:
+        return self._id
 
     async def init(self):
         # During start-up we will wait on container attachment,
@@ -1390,7 +1469,7 @@ class DockerContainerAPI:
         for callback in self._subscribers:
             callback(remove=True)
 
-        self._subscriber: list[Callable] = []
+        self._subscribers = []
 
     #############################################################
     async def _start(self) -> None:

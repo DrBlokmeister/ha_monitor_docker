@@ -4,6 +4,10 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import async_get as async_get_dev_reg
+
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import (
@@ -50,6 +54,8 @@ from .const import (
 from .helpers import DockerAPI
 
 _LOGGER = logging.getLogger(__name__)
+
+VERSION = 1
 
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=10)
 
@@ -176,3 +182,38 @@ async def async_reset_platform(hass: HomeAssistant, integration_name: str) -> No
     """Reload the integration."""
     if DOMAIN not in hass.data:
         _LOGGER.error("monitor_docker not loaded")
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old entity registry entries to new unique ID format."""
+    ent_reg = er.async_get(hass)
+    dev_reg = async_get_dev_reg(hass)
+
+    for entry in list(ent_reg.entities.values()):
+        if entry.platform != DOMAIN or not entry.unique_id:
+            continue
+
+        parts = entry.unique_id.split("_", 1)
+        if len(parts) != 2:
+            continue
+
+        container, key = parts
+        # skip if already an id (container IDs are 64 hex chars)
+        if len(container) == 64:
+            continue
+
+        for inst in hass.data.get(DOMAIN, {}).values():
+            api = inst.get(API)
+            if api and api.get_container(container):
+                cid = api.get_container(container).get_id()
+                new_unique_id = f"{cid}_{key}"
+                device = dev_reg.async_get_device({(DOMAIN, cid)}, set())
+                ent_reg.async_update_entity(
+                    entry.entity_id,
+                    new_unique_id=new_unique_id,
+                    device_id=device.id if device else None,
+                )
+                break
+
+    config_entry.version = VERSION
+    return True
